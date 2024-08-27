@@ -1,0 +1,172 @@
+package main
+
+import (
+	"bufio"
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+)
+
+type Field struct {
+	Name   string
+	Number int
+	GPA    float64
+}
+
+func main() {
+	// Call the method to read data from the file
+	fields, err := readDataFromFile("f3.txt")
+	if err != nil {
+		fmt.Println("Error reading data:", err)
+		return
+	}
+
+	// Create channels for communication between goroutines
+	dataChannel := make(chan Field, 12)
+	resultChannel := make(chan Field)
+	done := make(chan struct{})
+
+	var results []Field
+
+	// Start the worker goroutine to process data and send results
+	go worker(dataChannel, resultChannel)
+
+	// Start the dataThread method in a goroutine with the populated fields array and the "data" channel
+	go dataThread(fields, dataChannel)
+
+	// Start the result goroutine to process data from the channel and add it to the array
+	go result(resultChannel, &results, done)
+
+	// Wait for the done signal to indicate completion
+	<-done
+
+	// Write the results to the output file
+	err = writeResultsToFile(results, "output.txt")
+	if err != nil {
+		fmt.Println("Error writing results to file:", err)
+		return
+	}
+
+	fmt.Println("Results written to output.txt file.")
+}
+
+func writeResultsToFile(results []Field, filename string) error {
+	file, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+
+	// Write data to the file in table format
+	fmt.Fprintln(writer, "Number\tName\t\tNumber\tGPA")
+	fmt.Fprintln(writer, "----------------------------------------")
+	for i, field := range results {
+		fmt.Fprintf(writer, "%d\t%s\t%d\t%.2f\n", i+1, field.Name, field.Number, field.GPA)
+	}
+
+	// Flush the buffer and close the writer
+	err = writer.Flush()
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func compute(input Field) bool {
+	// Check if the number is >= 200 and GPA is >= 6
+	return input.Number >= 200 && input.GPA >= 6
+}
+
+func worker(inputChannel <-chan Field, outputChannel chan<- Field) {
+	// Process data from inputChannel and send results to outputChannel
+	for field := range inputChannel {
+		// Call the compute method to check the conditions
+		if compute(field) {
+			// If conditions are met, send the field to the outputChannel
+			outputChannel <- field
+		}
+	}
+
+	// Close the outputChannel to indicate the end of results
+	close(outputChannel)
+}
+
+func dataThread(fields []Field, ch chan Field) {
+	defer close(ch)
+
+	count := 0
+
+	// Process the fields and send them to the channel individually
+	for _, field := range fields {
+		// Perform some processing on the field (example: just pass it to the channel)
+		ch <- field
+
+		// Increment the count after sending a message
+		count++
+
+		// Check if count is equal to 25, and if so, set the closed flag
+		if count == 25 {
+			fmt.Println("Closing channel as count reached 25.")
+			break
+		}
+	}
+
+	// Print the total count of messages sent to the channel
+	fmt.Println("Total messages sent to the channel:", count)
+}
+
+func result(ch <-chan Field, results *[]Field, done chan<- struct{}) {
+	// Read data from the channel and add it to the results array
+	for field := range ch {
+		*results = append(*results, field)
+	}
+
+	// Signal completion to the main goroutine
+	done <- struct{}{}
+}
+
+func readDataFromFile(filename string) ([]Field, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var fields []Field
+	scanner := bufio.NewScanner(file)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		// Split the line into fields using comma as separator
+		fieldsData := strings.Split(line, ",")
+
+		// Convert Number and GPA from string to their respective types
+		number, err := strconv.Atoi(fieldsData[1])
+		if err != nil {
+			return nil, err
+		}
+
+		gpa, err := strconv.ParseFloat(fieldsData[2], 64)
+		if err != nil {
+			return nil, err
+		}
+
+		// Create a new Field object and add it to the fields array
+		field := Field{
+			Name:   fieldsData[0],
+			Number: number,
+			GPA:    gpa,
+		}
+		fields = append(fields, field)
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	return fields, nil
+}

@@ -1,0 +1,113 @@
+package main
+
+import (
+	"bufio"
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+)
+
+type Field struct {
+	Name   string
+	Number int
+	GPA    float64
+}
+
+func worker(dataChannel <-chan Field, resultChannel chan<- Field, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	for item := range dataChannel {
+		// Example: Process the item, and if it matches the criteria, send it to the resultChannel
+		if item.Number > 200 && item.GPA > 6 {
+			resultChannel <- item
+		}
+	}
+}
+
+func resultManager(resultChannel <-chan Field, done chan<- bool, outputFile *os.File) {
+	defer close(done)
+
+	// Write the header to the output file
+	header := "Number | Name                        | Credits    | GPA   \n"
+	_, err := outputFile.WriteString(header)
+	if err != nil {
+		fmt.Println("Error writing header to output file:", err)
+		return
+	}
+
+	number := 1
+	for item := range resultChannel {
+		// Example: Process the item received from the resultChannel and write to the outputFile
+		line := fmt.Sprintf("%-6d | %-30s | %-10d | %-5.2f\n", number, item.Name, item.Number, item.GPA)
+		_, err := outputFile.WriteString(line)
+		if err != nil {
+			fmt.Println("Error writing to output file:", err)
+			return
+		}
+		number++
+	}
+
+	fmt.Println("ResultManager has completed writing to the output file.")
+}
+
+func main() {
+	// Read data from the file and populate the dataChannel
+	dataChannel := make(chan Field)
+	resultChannel := make(chan Field)
+	done := make(chan bool)
+	var wg sync.WaitGroup
+
+	// Create an output file
+	outputFile, err := os.Create("output.txt")
+	if err != nil {
+		fmt.Println("Error creating output file:", err)
+		return
+	}
+	defer outputFile.Close()
+
+	// Spawning worker processes
+	numWorkers := 4 // Change this to the number of worker processes you want
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go worker(dataChannel, resultChannel, &wg)
+	}
+
+	// Start the resultManager goroutine
+	go resultManager(resultChannel, done, outputFile)
+
+	// Read data from the file and send it to the dataChannel
+	file, err := os.Open("f3.txt")
+	if err != nil {
+		fmt.Println("Error opening file:", err)
+		return
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		fields := strings.Split(line, ",")
+		if len(fields) >= 3 {
+			name := fields[0]
+			number, _ := strconv.Atoi(fields[1])
+			gpa, _ := strconv.ParseFloat(fields[2], 64)
+			dataChannel <- Field{Name: name, Number: number, GPA: gpa}
+		}
+	}
+
+	// Close dataChannel to signal that no more data will be sent
+	close(dataChannel)
+
+	// Wait for all worker goroutines to complete
+	wg.Wait()
+
+	// Close resultChannel to signal that no more results will be sent
+	close(resultChannel)
+
+	// Wait for the resultManager to complete
+	<-done
+
+	fmt.Println("All tasks completed. Results are saved in 'output.txt'.")
+}
